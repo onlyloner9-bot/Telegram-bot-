@@ -36,18 +36,24 @@ async function deleteMsg(chatId, msgId) {
 bot.on("message", async (msg) => {
   if (!msg.text) return
 
-  const chatId = msg.chat.id
-  const userId = msg.from.id
+  const text = msg.text.toLowerCase()
 
-  if (await isAdmin(chatId, userId)) return
+  const isLink =
+    text.includes("http") ||
+    text.includes("https") ||
+    text.includes("www.") ||
+    text.includes("t.me")
 
-  if (msg.text.includes("http") || msg.text.includes("t.me") || msg.text.includes("www.")) {
-    await deleteMsg(chatId, msg.message_id)
-    bot.sendMessage(chatId, "🚫 Links are not allowed here.")
+  if (isLink) {
+    try {
+      await bot.deleteMessage(msg.chat.id, msg.message_id)
+      bot.sendMessage(msg.chat.id, "🚫 Links are not allowed here.")
+    } catch (err) {
+      console.log("Delete failed:", err.message)
+    }
   }
 })
-
-// ================= ANTI-BAD WORDS =================
+  ============== ANTI-BAD WORDS =================
 bot.on("message", async (msg) => {
   if (!msg.text) return
 
