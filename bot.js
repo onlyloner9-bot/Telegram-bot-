@@ -1,124 +1,164 @@
-const TelegramBot = require('node-telegram-bot-api')
+const TelegramBot = require("node-telegram-bot-api")
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, {
-  polling: true
+const token = process.env.BOT_TOKEN
+if (!token) {
+  console.log("❌ BOT_TOKEN missing")
+  process.exit(1)
+}
+
+const bot = new TelegramBot(token, { polling: true })
+
+console.log("🤖 Protected Bot Running...")
+
+// ================= STORAGE =================
+const userWarnings = {}
+const badWords = ["fuck", "shit", "bitch", "asshole"] // edit this
+const spamTracker = {}
+
+// ================= CHECK ADMIN =================
+async function isAdmin(chatId, userId) {
+  try {
+    const admins = await bot.getChatAdministrators(chatId)
+    return admins.some(a => a.user.id === userId)
+  } catch {
+    return false
+  }
+}
+
+// ================= DELETE MESSAGE =================
+async function deleteMsg(chatId, msgId) {
+  try {
+    await bot.deleteMessage(chatId, msgId)
+  } catch {}
+}
+
+// ================= ANTI-LINK =================
+bot.on("message", async (msg) => {
+  if (!msg.text) return
+
+  const chatId = msg.chat.id
+  const userId = msg.from.id
+
+  if (await isAdmin(chatId, userId)) return
+
+  if (msg.text.includes("http") || msg.text.includes("t.me") || msg.text.includes("www.")) {
+    await deleteMsg(chatId, msg.message_id)
+    bot.sendMessage(chatId, "🚫 Links are not allowed here.")
+  }
 })
-from telegram import Update, ChatPermissions
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = "YOUR_BOT_TOKEN"
+// ================= ANTI-BAD WORDS =================
+bot.on("message", async (msg) => {
+  if (!msg.text) return
 
-# ---------------- START ----------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Group Management Bot is Active!")
+  const chatId = msg.chat.id
+  const userId = msg.from.id
+  const text = msg.text.toLowerCase()
 
-# ---------------- ADMIN CHECK ----------------
-async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
-    return user.status in ["administrator", "creator"]
+  if (await isAdmin(chatId, userId)) return
 
-# ---------------- KICK ----------------
-async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return await update.message.reply_text("❌ Admin only")
+  for (let word of badWords) {
+    if (text.includes(word)) {
+      await deleteMsg(chatId, msg.message_id)
 
-    if update.message.reply_to_message:
-        user_id = update.message.reply_to_message.from_user.id
-        await context.bot.ban_chat_member(update.effective_chat.id, user_id)
-        await update.message.reply_text("👢 User kicked!")
-    else:
-        await update.message.reply_text("Reply to a user")
+      userWarnings[userId] = (userWarnings[userId] || 0) + 1
 
-# ---------------- BAN ----------------
-async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return await update.message.reply_text("❌ Admin only")
+      if (userWarnings[userId] >= 3) {
+        try {
+          await bot.banChatMember(chatId, userId)
+          bot.sendMessage(chatId, "🚫 User banned for repeated bad words.")
+        } catch {}
+      } else {
+        bot.sendMessage(chatId, `⚠️ Warning ${userWarnings[userId]}/3`)
+      }
+      return
+    }
+  }
+})
 
-    if update.message.reply_to_message:
-        user_id = update.message.reply_to_message.from_user.id
-        await context.bot.ban_chat_member(update.effective_chat.id, user_id)
-        await update.message.reply_text("⛔ User banned!")
-    else:
-        await update.message.reply_text("Reply to a user")
+// ================= ANTI-SPAM =================
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from.id
 
-# ---------------- MUTE ----------------
-async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return await update.message.reply_text("❌ Admin only")
+  if (await isAdmin(chatId, userId)) return
 
-    if update.message.reply_to_message:
-        user_id = update.message.reply_to_message.from_user.id
+  const now = Date.now()
 
-        permissions = ChatPermissions(
-            can_send_messages=False
-        )
+  if (!spamTracker[userId]) {
+    spamTracker[userId] = []
+  }
 
-        await context.bot.restrict_chat_member(
-            update.effective_chat.id,
-            user_id,
-            permissions
-        )
+  spamTracker[userId].push(now)
 
-        await update.message.reply_text("🔇 User muted")
-    else:
-        await update.message.reply_text("Reply to a user")
+  // keep last 5 seconds messages
+  spamTracker[userId] = spamTracker[userId].filter(t => now - t < 5000)
 
-# ---------------- UNMUTE ----------------
-async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update, context):
-        return await update.message.reply_text("❌ Admin only")
+  if (spamTracker[userId].length > 5) {
+    await deleteMsg(chatId, msg.message_id)
+    bot.sendMessage(chatId, "🚫 Stop spamming!")
 
-    if update.message.reply_to_message:
-        user_id = update.message.reply_to_message.from_user.id
+    try {
+      await bot.kickChatMember(chatId, userId)
+    } catch {}
+  }
+})
 
-        permissions = ChatPermissions(
-            can_send_messages=True,
-            can_send_media_messages=True,
-            can_send_other_messages=True,
-            can_send_polls=True,
-            can_add_web_page_entries=True
-        )
+// ================= ANTI-MENTION SPAM =================
+bot.on("message", async (msg) => {
+  if (!msg.text) return
 
-        await context.bot.restrict_chat_member(
-            update.effective_chat.id,
-            user_id,
-            permissions
-        )
+  const chatId = msg.chat.id
+  const userId = msg.from.id
 
-        await update.message.reply_text("🔊 User unmuted")
+  if (await isAdmin(chatId, userId)) return
 
-# ---------------- ANTI-LINK ----------------
-async def anti_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message and update.message.text:
-        text = update.message.text.lower()
+  const mentions = (msg.text.match(/@/g) || []).length
 
-        links = ["http://", "https://", "t.me", "www."]
+  if (mentions > 3) {
+    await deleteMsg(chatId, msg.message_id)
+    bot.sendMessage(chatId, "🚫 Too many mentions!")
+  }
+})
 
-        if any(link in text for link in links):
-            try:
-                user_id = update.message.from_user.id
+// ================= BASIC COMMANDS =================
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, "👋 Protected Group Bot Active")
+})
 
-                member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+bot.onText(/\/help/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+`📌 Commands:
+/ban (reply)
+/unban (reply)
+/kick (reply)`
+  )
+})
 
-                if member.status not in ["administrator", "creator"]:
-                    await update.message.delete()
-            except:
-                pass
+// ================= BAN =================
+bot.onText(/\/ban/, async (msg) => {
+  if (!msg.reply_to_message) return
+  try {
+    await bot.banChatMember(msg.chat.id, msg.reply_to_message.from.id)
+    bot.sendMessage(msg.chat.id, "🚫 Banned")
+  } catch {}
+})
 
-# ---------------- MAIN ----------------
-def main():
-    app = Application.builder().token(TOKEN).build()
+// ================= UNBAN =================
+bot.onText(/\/unban/, async (msg) => {
+  if (!msg.reply_to_message) return
+  try {
+    await bot.unbanChatMember(msg.chat.id, msg.reply_to_message.from.id)
+    bot.sendMessage(msg.chat.id, "✅ Unbanned")
+  } catch {}
+})
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("kick", kick))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CommandHandler("mute", mute))
-    app.add_handler(CommandHandler("unmute", unmute))
-
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_link))
-
-    print("Bot is running...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+// ================= KICK =================
+bot.onText(/\/kick/, async (msg) => {
+  if (!msg.reply_to_message) return
+  try {
+    await bot.kickChatMember(msg.chat.id, msg.reply_to_message.from.id)
+    bot.sendMessage(msg.chat.id, "👢 Kicked")
+  } catch {}
+})
