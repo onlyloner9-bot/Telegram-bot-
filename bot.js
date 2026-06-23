@@ -3,20 +3,20 @@ const { Telegraf } = require("telegraf");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// ===== SETTINGS =====
-let settings = {
+// ================= SETTINGS =================
+const settings = {
   antilink: true,
   antibadword: true,
   antispam: true,
 };
 
-// ===== BAD WORD LIST (EDIT IT) =====
+// ================= BAD WORD LIST =================
 const badWords = ["badword1", "badword2", "fuck", "shit"];
 
-// ===== SPAM TRACKING =====
-const userMessages = {};
+// ================= SPAM TRACKER =================
+const spamMap = {};
 
-// ===== HELPER: CHECK ADMIN =====
+// ================= SAFE ADMIN CHECK =================
 async function isAdmin(ctx) {
   try {
     const member = await ctx.getChatMember(ctx.from.id);
@@ -26,144 +26,161 @@ async function isAdmin(ctx) {
   }
 }
 
-// ===== START =====
+// ================= SAFE DELETE =================
+async function safeDelete(ctx) {
+  try {
+    await ctx.deleteMessage(ctx.message.message_id);
+  } catch {}
+}
+
+// ================= START =================
 bot.start((ctx) => {
   ctx.reply(
-    "👋 Welcome to Group Manager Bot\n\nCommands:\n/antilink on|off\n/antibadword on|off\n/antispam on|off\n/ban\n/kick\n/mute\n/help"
-  );
-});
+`🤖 Group Management Bot
 
-// ===== HELP =====
-bot.command("help", (ctx) => {
-  ctx.reply(`
-🤖 Group Management Bot Commands:
-
-⚙️ SETTINGS:
+⚙ Commands:
 /antilink on|off
 /antibadword on|off
 /antispam on|off
 
-🛡 ADMIN ACTIONS:
-/ban (reply to user)
-/kick (reply to user)
-/mute (reply to user)
-`);
+👮 Admin:
+/ban (reply)
+/kick (reply)
+/mute (reply)`
+  );
 });
 
-// ===== TOGGLE COMMANDS =====
+// ================= TOGGLE COMMANDS =================
 bot.command("antilink", async (ctx) => {
   if (!(await isAdmin(ctx))) return ctx.reply("❌ Admin only");
+
   const arg = ctx.message.text.split(" ")[1];
   settings.antilink = arg === "on";
-  ctx.reply(`🔗 Anti-link is now ${settings.antilink ? "ON" : "OFF"}`);
+
+  ctx.reply(`🔗 Anti-link: ${settings.antilink ? "ON" : "OFF"}`);
 });
 
 bot.command("antibadword", async (ctx) => {
   if (!(await isAdmin(ctx))) return ctx.reply("❌ Admin only");
+
   const arg = ctx.message.text.split(" ")[1];
   settings.antibadword = arg === "on";
-  ctx.reply(`🚫 Anti-badword is now ${settings.antibadword ? "ON" : "OFF"}`);
+
+  ctx.reply(`🚫 Anti-badword: ${settings.antibadword ? "ON" : "OFF"}`);
 });
 
 bot.command("antispam", async (ctx) => {
   if (!(await isAdmin(ctx))) return ctx.reply("❌ Admin only");
+
   const arg = ctx.message.text.split(" ")[1];
   settings.antispam = arg === "on";
-  ctx.reply(`⚡ Anti-spam is now ${settings.antispam ? "ON" : "OFF"}`);
+
+  ctx.reply(`⚡ Anti-spam: ${settings.antispam ? "ON" : "OFF"}`);
 });
 
-// ===== ADMIN ACTIONS =====
+// ================= BAN =================
 bot.command("ban", async (ctx) => {
   if (!(await isAdmin(ctx))) return;
 
-  if (!ctx.message.reply_to_message) {
+  if (!ctx.message.reply_to_message)
     return ctx.reply("Reply to a user to ban");
-  }
 
-  const userId = ctx.message.reply_to_message.from.id;
-  await ctx.banChatMember(userId);
-  ctx.reply("🔨 User banned");
+  try {
+    const userId = ctx.message.reply_to_message.from.id;
+    await ctx.banChatMember(userId);
+    ctx.reply("🔨 User banned");
+  } catch {
+    ctx.reply("❌ Failed to ban user");
+  }
 });
 
+// ================= KICK =================
 bot.command("kick", async (ctx) => {
   if (!(await isAdmin(ctx))) return;
 
-  if (!ctx.message.reply_to_message) {
+  if (!ctx.message.reply_to_message)
     return ctx.reply("Reply to a user to kick");
-  }
 
-  const userId = ctx.message.reply_to_message.from.id;
-  await ctx.banChatMember(userId);
-  await ctx.unbanChatMember(userId);
-  ctx.reply("👢 User kicked");
+  try {
+    const userId = ctx.message.reply_to_message.from.id;
+    await ctx.banChatMember(userId);
+    await ctx.unbanChatMember(userId);
+    ctx.reply("👢 User kicked");
+  } catch {
+    ctx.reply("❌ Failed to kick user");
+  }
 });
 
+// ================= MUTE =================
 bot.command("mute", async (ctx) => {
   if (!(await isAdmin(ctx))) return;
 
-  if (!ctx.message.reply_to_message) {
+  if (!ctx.message.reply_to_message)
     return ctx.reply("Reply to a user to mute");
+
+  try {
+    const userId = ctx.message.reply_to_message.from.id;
+
+    await ctx.restrictChatMember(userId, {
+      permissions: {
+        can_send_messages: false,
+      },
+    });
+
+    ctx.reply("🔇 User muted");
+  } catch {
+    ctx.reply("❌ Failed to mute user");
   }
-
-  const userId = ctx.message.reply_to_message.from.id;
-
-  await ctx.restrictChatMember(userId, {
-    permissions: {
-      can_send_messages: false,
-    },
-  });
-
-  ctx.reply("🔇 User muted");
 });
 
-// ===== ANTI-LINK =====
+// ================= MESSAGE FILTER =================
 bot.on("text", async (ctx) => {
-  const text = ctx.message.text.toLowerCase();
+  const text = (ctx.message?.text || "").toLowerCase();
   const userId = ctx.from.id;
 
-  // ANTI LINK
+  // ===== ANTI LINK =====
   if (settings.antilink) {
     if (text.includes("http://") || text.includes("https://") || text.includes("t.me/")) {
       if (!(await isAdmin(ctx))) {
-        await ctx.deleteMessage();
-        return ctx.reply("🚫 Links are not allowed here!");
+        await safeDelete(ctx);
+        return ctx.reply("🚫 Links are not allowed");
       }
     }
   }
 
-  // ANTI BAD WORD
+  // ===== ANTI BAD WORD =====
   if (settings.antibadword) {
     for (let word of badWords) {
       if (text.includes(word)) {
         if (!(await isAdmin(ctx))) {
-          await ctx.deleteMessage();
-          return ctx.reply("🚫 Bad words are not allowed!");
+          await safeDelete(ctx);
+          return ctx.reply("🚫 Bad words are not allowed");
         }
       }
     }
   }
 
-  // ANTI SPAM
+  // ===== ANTI SPAM =====
   if (settings.antispam) {
-    if (!userMessages[userId]) userMessages[userId] = [];
+    if (!spamMap[userId]) spamMap[userId] = [];
 
     const now = Date.now();
-    userMessages[userId].push(now);
+    spamMap[userId].push(now);
 
-    userMessages[userId] = userMessages[userId].filter(
-      (t) => now - t < 4000
-    );
+    spamMap[userId] = spamMap[userId].filter(t => now - t < 4000);
 
-    if (userMessages[userId].length > 5) {
-      await ctx.deleteMessage();
-      return ctx.reply("⚠️ Stop spamming!");
+    if (spamMap[userId].length > 5) {
+      await safeDelete(ctx);
+      return ctx.reply("⚠️ Stop spamming");
     }
   }
 });
 
-// ===== ERROR HANDLING =====
-bot.catch((err) => console.log("Bot error:", err));
+// ================= ERROR HANDLER =================
+bot.catch((err) => {
+  console.log("BOT ERROR:", err);
+});
 
-// ===== START BOT =====
+// ================= START BOT =================
 bot.launch();
 console.log("🤖 Bot is running...");
