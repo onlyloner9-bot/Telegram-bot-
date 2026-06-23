@@ -1,4 +1,4 @@
-const TelegramBot = require('node-telegram-bot-api');
+const TelegramBot = require("node-telegram-bot-api");
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: true
@@ -7,8 +7,8 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-    'Hello! My bot is online.'
+    "Group Management Bot Online!"
   );
 });
 
-console.log('Bot started');
+console.log("Bot Started");
