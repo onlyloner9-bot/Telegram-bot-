@@ -1,170 +1,169 @@
-const TelegramBot = require("node-telegram-bot-api")
+require("dotenv").config();
+const { Telegraf } = require("telegraf");
 
-const token = process.env.BOT_TOKEN
-if (!token) {
-  console.log("❌ BOT_TOKEN missing")
-  process.exit(1)
-}
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
-const bot = new TelegramBot(token, { polling: true })
+// ===== SETTINGS =====
+let settings = {
+  antilink: true,
+  antibadword: true,
+  antispam: true,
+};
 
-console.log("🤖 Protected Bot Running...")
+// ===== BAD WORD LIST (EDIT IT) =====
+const badWords = ["badword1", "badword2", "fuck", "shit"];
 
-// ================= STORAGE =================
-const userWarnings = {}
-const badWords = ["fuck", "shit", "bitch", "asshole"] // edit this
-const spamTracker = {}
+// ===== SPAM TRACKING =====
+const userMessages = {};
 
-// ================= CHECK ADMIN =================
-async function isAdmin(chatId, userId) {
+// ===== HELPER: CHECK ADMIN =====
+async function isAdmin(ctx) {
   try {
-    const admins = await bot.getChatAdministrators(chatId)
-    return admins.some(a => a.user.id === userId)
+    const member = await ctx.getChatMember(ctx.from.id);
+    return ["creator", "administrator"].includes(member.status);
   } catch {
-    return false
+    return false;
   }
 }
 
-// ================= DELETE MESSAGE =================
-async function deleteMsg(chatId, msgId) {
-  try {
-    await bot.deleteMessage(chatId, msgId)
-  } catch {}
-}
+// ===== START =====
+bot.start((ctx) => {
+  ctx.reply(
+    "👋 Welcome to Group Manager Bot\n\nCommands:\n/antilink on|off\n/antibadword on|off\n/antispam on|off\n/ban\n/kick\n/mute\n/help"
+  );
+});
 
-// ================= ANTI-LINK =================
-bot.on("message", async (msg) => {
-  if (!msg.text) return
+// ===== HELP =====
+bot.command("help", (ctx) => {
+  ctx.reply(`
+🤖 Group Management Bot Commands:
 
-  const text = msg.text.toLowerCase()
+⚙️ SETTINGS:
+/antilink on|off
+/antibadword on|off
+/antispam on|off
 
-  const isLink =
-    text.includes("http") ||
-    text.includes("https") ||
-    text.includes("www.") ||
-    text.includes("t.me")
+🛡 ADMIN ACTIONS:
+/ban (reply to user)
+/kick (reply to user)
+/mute (reply to user)
+`);
+});
 
-  if (isLink) {
-    try {
-      await bot.deleteMessage(msg.chat.id, msg.message_id)
-      bot.sendMessage(msg.chat.id, "🚫 Links are not allowed here.")
-    } catch (err) {
-      console.log("Delete failed:", err.message)
-    }
+// ===== TOGGLE COMMANDS =====
+bot.command("antilink", async (ctx) => {
+  if (!(await isAdmin(ctx))) return ctx.reply("❌ Admin only");
+  const arg = ctx.message.text.split(" ")[1];
+  settings.antilink = arg === "on";
+  ctx.reply(`🔗 Anti-link is now ${settings.antilink ? "ON" : "OFF"}`);
+});
+
+bot.command("antibadword", async (ctx) => {
+  if (!(await isAdmin(ctx))) return ctx.reply("❌ Admin only");
+  const arg = ctx.message.text.split(" ")[1];
+  settings.antibadword = arg === "on";
+  ctx.reply(`🚫 Anti-badword is now ${settings.antibadword ? "ON" : "OFF"}`);
+});
+
+bot.command("antispam", async (ctx) => {
+  if (!(await isAdmin(ctx))) return ctx.reply("❌ Admin only");
+  const arg = ctx.message.text.split(" ")[1];
+  settings.antispam = arg === "on";
+  ctx.reply(`⚡ Anti-spam is now ${settings.antispam ? "ON" : "OFF"}`);
+});
+
+// ===== ADMIN ACTIONS =====
+bot.command("ban", async (ctx) => {
+  if (!(await isAdmin(ctx))) return;
+
+  if (!ctx.message.reply_to_message) {
+    return ctx.reply("Reply to a user to ban");
   }
-})
-  ============== ANTI-BAD WORDS =================
-bot.on("message", async (msg) => {
-  if (!msg.text) return
 
-  const chatId = msg.chat.id
-  const userId = msg.from.id
-  const text = msg.text.toLowerCase()
+  const userId = ctx.message.reply_to_message.from.id;
+  await ctx.banChatMember(userId);
+  ctx.reply("🔨 User banned");
+});
 
-  if (await isAdmin(chatId, userId)) return
+bot.command("kick", async (ctx) => {
+  if (!(await isAdmin(ctx))) return;
 
-  for (let word of badWords) {
-    if (text.includes(word)) {
-      await deleteMsg(chatId, msg.message_id)
+  if (!ctx.message.reply_to_message) {
+    return ctx.reply("Reply to a user to kick");
+  }
 
-      userWarnings[userId] = (userWarnings[userId] || 0) + 1
+  const userId = ctx.message.reply_to_message.from.id;
+  await ctx.banChatMember(userId);
+  await ctx.unbanChatMember(userId);
+  ctx.reply("👢 User kicked");
+});
 
-      if (userWarnings[userId] >= 3) {
-        try {
-          await bot.banChatMember(chatId, userId)
-          bot.sendMessage(chatId, "🚫 User banned for repeated bad words.")
-        } catch {}
-      } else {
-        bot.sendMessage(chatId, `⚠️ Warning ${userWarnings[userId]}/3`)
+bot.command("mute", async (ctx) => {
+  if (!(await isAdmin(ctx))) return;
+
+  if (!ctx.message.reply_to_message) {
+    return ctx.reply("Reply to a user to mute");
+  }
+
+  const userId = ctx.message.reply_to_message.from.id;
+
+  await ctx.restrictChatMember(userId, {
+    permissions: {
+      can_send_messages: false,
+    },
+  });
+
+  ctx.reply("🔇 User muted");
+});
+
+// ===== ANTI-LINK =====
+bot.on("text", async (ctx) => {
+  const text = ctx.message.text.toLowerCase();
+  const userId = ctx.from.id;
+
+  // ANTI LINK
+  if (settings.antilink) {
+    if (text.includes("http://") || text.includes("https://") || text.includes("t.me/")) {
+      if (!(await isAdmin(ctx))) {
+        await ctx.deleteMessage();
+        return ctx.reply("🚫 Links are not allowed here!");
       }
-      return
     }
   }
-})
 
-// ================= ANTI-SPAM =================
-bot.on("message", async (msg) => {
-  const chatId = msg.chat.id
-  const userId = msg.from.id
-
-  if (await isAdmin(chatId, userId)) return
-
-  const now = Date.now()
-
-  if (!spamTracker[userId]) {
-    spamTracker[userId] = []
+  // ANTI BAD WORD
+  if (settings.antibadword) {
+    for (let word of badWords) {
+      if (text.includes(word)) {
+        if (!(await isAdmin(ctx))) {
+          await ctx.deleteMessage();
+          return ctx.reply("🚫 Bad words are not allowed!");
+        }
+      }
+    }
   }
 
-  spamTracker[userId].push(now)
+  // ANTI SPAM
+  if (settings.antispam) {
+    if (!userMessages[userId]) userMessages[userId] = [];
 
-  // keep last 5 seconds messages
-  spamTracker[userId] = spamTracker[userId].filter(t => now - t < 5000)
+    const now = Date.now();
+    userMessages[userId].push(now);
 
-  if (spamTracker[userId].length > 5) {
-    await deleteMsg(chatId, msg.message_id)
-    bot.sendMessage(chatId, "🚫 Stop spamming!")
+    userMessages[userId] = userMessages[userId].filter(
+      (t) => now - t < 4000
+    );
 
-    try {
-      await bot.kickChatMember(chatId, userId)
-    } catch {}
+    if (userMessages[userId].length > 5) {
+      await ctx.deleteMessage();
+      return ctx.reply("⚠️ Stop spamming!");
+    }
   }
-})
+});
 
-// ================= ANTI-MENTION SPAM =================
-bot.on("message", async (msg) => {
-  if (!msg.text) return
+// ===== ERROR HANDLING =====
+bot.catch((err) => console.log("Bot error:", err));
 
-  const chatId = msg.chat.id
-  const userId = msg.from.id
-
-  if (await isAdmin(chatId, userId)) return
-
-  const mentions = (msg.text.match(/@/g) || []).length
-
-  if (mentions > 3) {
-    await deleteMsg(chatId, msg.message_id)
-    bot.sendMessage(chatId, "🚫 Too many mentions!")
-  }
-})
-
-// ================= BASIC COMMANDS =================
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "👋 Protected Group Bot Active")
-})
-
-bot.onText(/\/help/, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-`📌 Commands:
-/ban (reply)
-/unban (reply)
-/kick (reply)`
-  )
-})
-
-// ================= BAN =================
-bot.onText(/\/ban/, async (msg) => {
-  if (!msg.reply_to_message) return
-  try {
-    await bot.banChatMember(msg.chat.id, msg.reply_to_message.from.id)
-    bot.sendMessage(msg.chat.id, "🚫 Banned")
-  } catch {}
-})
-
-// ================= UNBAN =================
-bot.onText(/\/unban/, async (msg) => {
-  if (!msg.reply_to_message) return
-  try {
-    await bot.unbanChatMember(msg.chat.id, msg.reply_to_message.from.id)
-    bot.sendMessage(msg.chat.id, "✅ Unbanned")
-  } catch {}
-})
-
-// ================= KICK =================
-bot.onText(/\/kick/, async (msg) => {
-  if (!msg.reply_to_message) return
-  try {
-    await bot.kickChatMember(msg.chat.id, msg.reply_to_message.from.id)
-    bot.sendMessage(msg.chat.id, "👢 Kicked")
-  } catch {}
-})
+// ===== START BOT =====
+bot.launch();
+console.log("🤖 Bot is running...");
